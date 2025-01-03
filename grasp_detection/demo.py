@@ -9,10 +9,11 @@ from gsnet import AnyGrasp
 from graspnetAPI import GraspGroup
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--checkpoint_path', required=True, help='Model checkpoint path')
+parser.add_argument('--checkpoint_path', default="log/checkpoint_detection.tar", help='Model checkpoint path')
+parser.add_argument('--top_down_grasp', default=True, help='Output top-down grasps.')
+
 parser.add_argument('--max_gripper_width', type=float, default=0.1, help='Maximum gripper width (<=0.1m)')
 parser.add_argument('--gripper_height', type=float, default=0.03, help='Gripper height')
-parser.add_argument('--top_down_grasp', action='store_true', help='Output top-down grasps.')
 parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 cfgs = parser.parse_args()
 cfgs.max_gripper_width = max(0, min(0.1, cfgs.max_gripper_width))
