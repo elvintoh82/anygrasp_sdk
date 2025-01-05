@@ -27,7 +27,7 @@ parser.add_argument('--top_down_grasp', default=True, help='Output top-down gras
 
 parser.add_argument('--max_gripper_width', type=float, default=0.1, help='Maximum gripper width (<=0.1m)')
 parser.add_argument('--gripper_height', type=float, default=0.03, help='Gripper height')
-parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+parser.add_argument('--debug', default=True, action='store_true', help='Enable debug mode')
 cfgs = parser.parse_args()
 cfgs.max_gripper_width = max(0, min(0.1, cfgs.max_gripper_width))
 
@@ -45,9 +45,6 @@ class Perception(Node):
     self.create_subscription(Image, "/D455/color/image_raw", callback=self.cb_img_raw, callback_group=self.callback_group_B, qos_profile=10)
     self.create_subscription(Image, "/D455/aligned_depth_to_color/image_raw", callback=self.cb_img_dep, callback_group=self.callback_group_B, qos_profile=10)
 
-    return
-    self.create_subscription(MyFrame, 'my_frame', self.callback, 10)
-    self.create_subscription(Camera, 'camera', self.callback, 10)
     anygrasp = AnyGrasp(cfgs)
     anygrasp.load_net()
 
