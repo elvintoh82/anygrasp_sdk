@@ -3,7 +3,6 @@ import argparse
 import torch
 import numpy as np
 import open3d as o3d
-from PIL import Image
 
 from gsnet import AnyGrasp
 from graspnetAPI import GraspGroup
@@ -54,34 +53,19 @@ class Perception(Node):
     self.anygrasp = AnyGrasp(cfgs)
     self.anygrasp.load_net()
 
-    # get data
-    # colors = np.array(Image.open(os.path.join(data_dir, 'color.png')), dtype=np.float32) / 255.0
-    # depths = np.array(Image.open(os.path.join(data_dir, 'depth.png')))
-    # get camera intrinsics
-    # fx, fy = 927.17, 927.37
-    # cx, cy = 651.32, 349.62
-    # scale = 1000.0
     # set workspace to filter output grasps
-    xmin, xmax = -0.19, 0.12
-    ymin, ymax = 0.02, 0.15
-    zmin, zmax = 0.0, 1.0
+    # xmin, xmax = -0.19, 0.12
+    # ymin, ymax = 0.02, 0.15
+    # zmin, zmax = 0.0, 1.0
+    xmin, xmax = -1.0, 1.0
+    ymin, ymax = -1.0, 1.0
+    zmin, zmax = 0.0, 2.0
     self.lims = [xmin, xmax, ymin, ymax, zmin, zmax]
 
-    return
-    # get point cloud
-    xmap, ymap = np.arange(depths.shape[1]), np.arange(depths.shape[0])
-    xmap, ymap = np.meshgrid(xmap, ymap)
-    points_z = depths / scale
-    points_x = (xmap - cx) / fx * points_z
-    points_y = (ymap - cy) / fy * points_z
 
     # set your workspace to crop point cloud
-    mask = (points_z > 0) & (points_z < 1)
-    points = np.stack([points_x, points_y, points_z], axis=-1)
-    points = points[mask].astype(np.float32)
-    colors = colors[mask].astype(np.float32)
-    print(points.min(axis=0), points.max(axis=0))
-
+    # mask = (points_z > 0) & (points_z < 1)
+    # points = np.stack([points_x, points_y, points_z], axis=-1)
 
 
 
@@ -103,36 +87,41 @@ class Perception(Node):
     colors = np.asarray(pcd.colors, dtype=np.float32)
 
     gg, cloud = self.anygrasp.get_grasp(points, colors, lims=self.lims, apply_object_mask=False, dense_grasp=False, collision_detection=True)
-    print(gg)
-    print(cloud)
 
     if len(gg) == 0:
-      print('No Grasp detected after collision detection!')
+      print('No Grasp detected!')
+      return ConsPercept.NOTFOUND.value
 
     gg = gg.nms().sort_by_score()
-    gg_pick = gg[0:20]
-    print(gg_pick.scores)
-    print('grasp score:', gg_pick[0].score)
+    #we are only interested in the top 20 scores
+    # gg_pick = gg[0:20]
+    # u, v = self._get_uv_from_grasp(gg_pick[0])
+
+    coords = map(self._get_uv_from_grasp, gg[:20])
+    for idx, each in enumerate(coords):
+      print(f"{idx}: Score: {gg[idx].score:.2f}\tCoord: {each}")
 
     # visualization
     if cfgs.debug:
-      trans_mat = np.array([[1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,1]])
-      cloud.transform(trans_mat)
       grippers = gg.to_open3d_geometry_list()
-      for gripper in grippers:
-        gripper.transform(trans_mat)
-      o3d.visualization.draw_geometries([*grippers, cloud])
-      o3d.visualization.draw_geometries([grippers[0], cloud])
-
+      grippers[0].paint_uniform_color([1, 0, 0])
+      sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)
+      sphere.translate(gg[0].translation)
+      sphere.paint_uniform_color([1, 0, 0])
+      # o3d.visualization.draw_geometries([*grippers, cloud, sphere])
+      # o3d.visualization.draw_geometries([*grippers, cloud])
+      try:
+        o3d.visualization.draw_geometries([*grippers[:20], cloud, sphere])
+      except Exception as e:
+        self.logger.error(f"Error displaying o3d visualisation: {e}")
+    
     return response
   
   def cb_img_raw(self, msg):
     self.img_raw = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-    # self.logger.info(f"{msg.header.stamp}")
   
   def cb_img_dep(self, msg):
     self.img_dep = self.bridge.imgmsg_to_cv2(msg, '16UC1')
-    # self.logger.warn(f"{msg.header.stamp}")
 
   def _pcd_maker(self, rgb, dep, mask):
     if mask is None:
@@ -141,17 +130,31 @@ class Perception(Node):
     # else:
     masked_rgb = cv2.bitwise_and(rgb, rgb, mask=mask)
     masked_dep = cv2.bitwise_and(dep, dep, mask=mask)
+    # we remove depth values that are more than 900mm
+    masked_dep[masked_dep > 900] = 0
 
-    print("aaa", end=" ")
     o3d_color = o3d.geometry.Image(cv2.cvtColor(masked_rgb, cv2.COLOR_BGR2RGB))
-    print("bbb", end=" ")
-    o3d_depth = o3d.geometry.Image(masked_dep)    
-    print("ccc", end=" ")
+    o3d_depth = o3d.geometry.Image(masked_dep)
+
     rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(color=o3d_color, depth=o3d_depth, depth_scale=1000, convert_rgb_to_intensity=False)
-    print("ddd", end=" ")
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, self.o3d_intrin, np.eye(4))
-    print("eee")
     return pcd
+  
+  def _get_uv_from_grasp(self, grasp):
+    x, y, z = grasp.translation
+    point = np.array([x, y, z])
+    return self._get_uv_from_xyz(point)
+
+  def _get_uv_from_xyz(self, point_array):
+    # Project the 3D point array to 2D using the intrinsic matrix
+    # extrinsic_matrix = np.eye(4)  # Assuming no extrinsic transformation
+
+    #since extrinsic mtx is identity, so we skip multiplying it, and just use the intrinsic mtx in the 3x3 form directly
+    # point_2d = self.camera.intrinsic_mtx @ (extrinsic_matrix @ point_3d)[:3]
+    point_2d = self.camera.intrinsic_mtx @ point_array
+    u = int(point_2d[0] / point_2d[2])
+    v = int(point_2d[1] / point_2d[2])
+    return u, v
 
 def main(args=None):
   rclpy.init(args=args)
