@@ -5,8 +5,8 @@ import numpy as np
 import open3d as o3d
 from PIL import Image
 
-# from gsnet import AnyGrasp
-# from graspnetAPI import GraspGroup
+from gsnet import AnyGrasp
+from graspnetAPI import GraspGroup
 
 from my_libs.myframe import Myframe
 from my_libs.mycamera import Camera
@@ -14,6 +14,8 @@ from my_libs.myconstants import ConsPercept
 from my_custom_interfaces.srv import TriggerVisionGetAll, TriggerVisionGetCropped, TriggerVisionGetContours, TriggerVisionGetPose, TriggerVisionGetSolutions
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
+import cv2
+from datetime import datetime
 
 from pathlib import Path
 import rclpy
@@ -41,26 +43,31 @@ class Perception(Node):
     self.callback_group_A = MutuallyExclusiveCallbackGroup()
     self.callback_group_B = MutuallyExclusiveCallbackGroup()
     self.bridge = CvBridge()
+    self.img_raw = None
+    self.img_dep = None
+    self.mask = cv2.rectangle(np.zeros((self.camera.intrinsic[1], self.camera.intrinsic[0]), dtype=np.uint8), (150, 100), (500, 400), 255, -1)
+
     self.create_service(TriggerVisionGetSolutions, "/triggervisiongetsolutions", callback=self.cb_trigger_get_solutions, callback_group=self.callback_group_A)
     self.create_subscription(Image, "/D455/color/image_raw", callback=self.cb_img_raw, callback_group=self.callback_group_B, qos_profile=10)
     self.create_subscription(Image, "/D455/aligned_depth_to_color/image_raw", callback=self.cb_img_dep, callback_group=self.callback_group_B, qos_profile=10)
 
-    anygrasp = AnyGrasp(cfgs)
-    anygrasp.load_net()
+    self.anygrasp = AnyGrasp(cfgs)
+    self.anygrasp.load_net()
 
-  # get data
-    colors = np.array(Image.open(os.path.join(data_dir, 'color.png')), dtype=np.float32) / 255.0
-    depths = np.array(Image.open(os.path.join(data_dir, 'depth.png')))
+    # get data
+    # colors = np.array(Image.open(os.path.join(data_dir, 'color.png')), dtype=np.float32) / 255.0
+    # depths = np.array(Image.open(os.path.join(data_dir, 'depth.png')))
     # get camera intrinsics
-    fx, fy = 927.17, 927.37
-    cx, cy = 651.32, 349.62
-    scale = 1000.0
+    # fx, fy = 927.17, 927.37
+    # cx, cy = 651.32, 349.62
+    # scale = 1000.0
     # set workspace to filter output grasps
     xmin, xmax = -0.19, 0.12
     ymin, ymax = 0.02, 0.15
     zmin, zmax = 0.0, 1.0
-    lims = [xmin, xmax, ymin, ymax, zmin, zmax]
+    self.lims = [xmin, xmax, ymin, ymax, zmin, zmax]
 
+    return
     # get point cloud
     xmap, ymap = np.arange(depths.shape[1]), np.arange(depths.shape[0])
     xmap, ymap = np.meshgrid(xmap, ymap)
@@ -75,7 +82,29 @@ class Perception(Node):
     colors = colors[mask].astype(np.float32)
     print(points.min(axis=0), points.max(axis=0))
 
-    gg, cloud = anygrasp.get_grasp(points, colors, lims=lims, apply_object_mask=True, dense_grasp=False, collision_detection=True)
+
+
+
+  def cb_trigger_get_solutions(self, req, response):
+    self.logger.info("Triggered")
+    if (self.img_raw is None) or (self.img_dep is None):
+      self.logger.warn("Rgb and depth images have not been received yet. Try again.")
+      response.successcode = ConsPercept.FAIL.value
+      return response
+    
+    #we randomly save 50% of the images
+    if np.random.rand() > 0.5:
+      now = datetime.now().strftime("%y%m%d_%H%M%SH")
+      cv2.imwrite(str(Path(f"./data/{now}_rgb.png")), self.img_raw)
+      cv2.imwrite(str(Path(f"./data/{now}_dep.png")), self.img_dep)
+
+    pcd = self._pcd_maker(self.img_raw, self.img_dep, None)
+    points = np.asarray(pcd.points, dtype=np.float32)
+    colors = np.asarray(pcd.colors, dtype=np.float32)
+
+    gg, cloud = self.anygrasp.get_grasp(points, colors, lims=self.lims, apply_object_mask=False, dense_grasp=False, collision_detection=True)
+    print(gg)
+    print(cloud)
 
     if len(gg) == 0:
       print('No Grasp detected after collision detection!')
@@ -95,9 +124,6 @@ class Perception(Node):
       o3d.visualization.draw_geometries([*grippers, cloud])
       o3d.visualization.draw_geometries([grippers[0], cloud])
 
-
-  def cb_trigger_get_solutions(self, req, response):
-    self.logger.info("Triggered")
     return response
   
   def cb_img_raw(self, msg):
@@ -107,6 +133,25 @@ class Perception(Node):
   def cb_img_dep(self, msg):
     self.img_dep = self.bridge.imgmsg_to_cv2(msg, '16UC1')
     # self.logger.warn(f"{msg.header.stamp}")
+
+  def _pcd_maker(self, rgb, dep, mask):
+    if mask is None:
+      # if no mask is provided, we assume the whole image is the mask
+      mask = np.ones(dep.shape, dtype=np.uint8) * 255
+    # else:
+    masked_rgb = cv2.bitwise_and(rgb, rgb, mask=mask)
+    masked_dep = cv2.bitwise_and(dep, dep, mask=mask)
+
+    print("aaa", end=" ")
+    o3d_color = o3d.geometry.Image(cv2.cvtColor(masked_rgb, cv2.COLOR_BGR2RGB))
+    print("bbb", end=" ")
+    o3d_depth = o3d.geometry.Image(masked_dep)    
+    print("ccc", end=" ")
+    rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(color=o3d_color, depth=o3d_depth, depth_scale=1000, convert_rgb_to_intensity=False)
+    print("ddd", end=" ")
+    pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, self.o3d_intrin, np.eye(4))
+    print("eee")
+    return pcd
 
 def main(args=None):
   rclpy.init(args=args)

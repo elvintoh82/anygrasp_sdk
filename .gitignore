@@ -7,3 +7,4 @@
 .TimeRecord
 license
 *.tar
+grasp_detection/data/*.png
