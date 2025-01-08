@@ -1,0 +1,14 @@
+{
+    "version": "3.1.0",
+    "feature_id": "15532986693787101069",
+    "public_key": "ChingRu.public_key",
+    "signature": "ChingRu.signature",
+    "license": "ChingRu.lic",
+    "toolbox": [
+        {
+            "name": "Basic",
+            "type": "PERMANENT",
+            "data": ""
+        }
+    ]
+}
