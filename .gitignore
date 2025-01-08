@@ -5,6 +5,5 @@
 *.egg
 .DS_Store
 .TimeRecord
-license
 *.tar
 grasp_detection/data/*.png
