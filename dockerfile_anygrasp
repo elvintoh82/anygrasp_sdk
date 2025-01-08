@@ -56,10 +56,10 @@ RUN ln -s /opt/nvidia/nsight-systems/2022.4.2/host-linux-x64/libcrypto.so.1.1 /u
 #7935008447230974262    if we run license_checker -f inside this docker container.
 #15532986693787101069   if i run it on the host pc in lab (by copying the libcrypto file to the host pc and correct folder)
 
-
-COPY ./src/anygrasp_sdk /anygrasp_sdk
-
-WORKDIR /anygrasp_sdk/pointnet2
+#not sure if this will work yet, not confirmed
+COPY ./pointnet2 /pointnet2
+WORKDIR /pointnet2
+##
 
 RUN python3 setup.py install
 
