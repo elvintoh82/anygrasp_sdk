@@ -1,0 +1,70 @@
+FROM dock_ai_core
+
+#most of this stuff is for minkowski engine
+RUN apt-get update && apt-get install -y git \
+  ninja-build \
+  cmake \
+  build-essential \
+  libopenblas-dev \
+  xterm \
+  xauth \
+  openssh-server \
+  tmux \
+  mate-desktop-environment-core
+
+
+#related to install minkowski engine
+ENV MAX_JOBS=2
+ENV TORCH_CUDA_ARCH_LIST="8.0 8.6 8.7"
+RUN git clone --recursive "https://github.com/NVIDIA/MinkowskiEngine"
+RUN cd MinkowskiEngine; python3 setup.py install --force_cuda --blas=openblas
+
+#we downgrade numpy to 1.23.5 to prevent the np.float error when import graspnetAPI
+RUN pip install --upgrade numpy==1.23.5
+
+#this is a partial list of the dependencies required for graspnetAPI (since we choose no-deps when we pip install graspnetAPI later)
+RUN pip install transforms3d==0.3.1 \
+  sphinx==3.0.3 \
+  sphinx_rtd_theme \
+  PyYAML \
+  trimesh \
+  tqdm \
+  Pillow \
+  matplotlib \
+  pywavefront \
+  cvxopt \
+  dill \
+  h5py \
+  grasp_nms \
+  scikit-learn
+
+  #autolab_core is a crazy package that wants to install a lot of stuff that will somehow install numpy 2.2.1 and scipy 1.14. so we make it no-deps and manually install
+RUN pip install -U --no-deps scikit-image \  
+  autolab_perception \
+  autolab_core \
+  multiprocess \
+  setproctitle \
+  ruamel.yaml \
+  joblib \
+  colorlog \
+  lazy_loader \
+  graspnetAPI
+
+#problem when running license checker needing libcrypto.so.1.1
+RUN ln -s /opt/nvidia/nsight-systems/2022.4.2/host-linux-x64/libcrypto.so.1.1 /usr/lib/libcrypto.so.1.1
+
+#7935008447230974262    if we run license_checker -f inside this docker container.
+#15532986693787101069   if i run it on the host pc in lab (by copying the libcrypto file to the host pc and correct folder)
+
+
+COPY ./src/anygrasp_sdk /anygrasp_sdk
+
+WORKDIR /anygrasp_sdk/pointnet2
+
+RUN python3 setup.py install
+
+WORKDIR /
+
+#this image depends on dock_ai_core. make sure that it already exists.
+#to build this image, run the below
+#docker build -t dock_anygrasp -f dockerfile_anygrasp .
