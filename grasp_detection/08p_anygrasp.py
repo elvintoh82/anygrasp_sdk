@@ -36,7 +36,7 @@ cfgs.max_gripper_width = max(0, min(0.1, cfgs.max_gripper_width))
 
 class Perception(Node):
   def __init__(self):
-    super().__init__('Perception_node_anygrasp')
+    super().__init__('node_anygrasp')
     self.logger = self.get_logger()
     assert torch.cuda.is_available(), 'No CUDA available!'
     self.camera = Camera.load_from_path("D455", Path("./results.json"))
@@ -55,21 +55,10 @@ class Perception(Node):
     self.anygrasp = AnyGrasp(cfgs)
     self.anygrasp.load_net()
 
-    # set workspace to filter output grasps
-    # xmin, xmax = -0.19, 0.12
-    # ymin, ymax = 0.02, 0.15
-    # zmin, zmax = 0.0, 1.0
     xmin, xmax = -1.0, 1.0
     ymin, ymax = -1.0, 1.0
     zmin, zmax = 0.0, 2.0
     self.lims = [xmin, xmax, ymin, ymax, zmin, zmax]
-
-
-    # set your workspace to crop point cloud
-    # mask = (points_z > 0) & (points_z < 1)
-    # points = np.stack([points_x, points_y, points_z], axis=-1)
-
-
 
   def cb_trigger(self, req, response):
     self.logger.info("Triggered")
@@ -95,14 +84,14 @@ class Perception(Node):
       return ConsPercept.NOTFOUND.value
 
     gg = gg.nms().sort_by_score()
-    coords = map(self._get_uv_from_grasp, gg[:20])
+    coords = map(self._get_uv_from_grasp, gg)
     bbox = req.bbox
     corner0 = bbox.corners[0]
     corner1 = bbox.corners[1]
     x1, y1 = corner0.x, corner0.y
     x2, y2 = corner1.x, corner1.y
     assert x2 > x1, f"x2 must be greater than x1: {x1} vs {x2}"
-    assert y2 > y1, "y2 must be greater than y1: {y1} vs {y2}"
+    assert y2 > y1, f"y2 must be greater than y1: {y1} vs {y2}"
     for idx, each in enumerate(coords):
       u, v = each
       if x1 <= u <= x2 and y1 <= v <= y2:
@@ -115,11 +104,12 @@ class Perception(Node):
         response.pose_stamped = ps
         response.width_mm = int(gg[idx].width * 1000)
         response.score = gg[idx].score
-        print(f"Width: {gg[idx].width*1000:.0f}mm\tHeight: {gg[idx].height*1000:.0f}mm")
+        self.logger.info(f"Width: {gg[idx].width*1000:.0f}mm\tScore: {gg[idx].score:.2f}\tHt: {gg[idx].height*1000:.0f}mm")
         response.successcode = ConsPercept.FOUND.value
         break
     else:
-        response.successcode = ConsPercept.NOTFOUND.value
+      response.successcode = ConsPercept.NOTFOUND.value
+      self.logger.warn(f"Out of {len(gg)} total grasps, none was within bbox")
 
     # visualization
     if cfgs.debug:
@@ -127,25 +117,27 @@ class Perception(Node):
       grippers[idx].paint_uniform_color([1, 0, 0])
       sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
       sphere.translate(gg[idx].translation)
-      sphere.paint_uniform_color([1, 0, 0])
-      
-      vis = o3d.visualization.Visualizer()
-      vis.create_window()
-      
-      vis.add_geometry(grippers[idx])
-      vis.add_geometry(cloud)
-      vis.add_geometry(sphere)
+      sphere.paint_uniform_color([1, 0, 0])     
 
-      ctr = vis.get_view_control()
-      print(dir(vis))
+      self.vis = o3d.visualization.Visualizer()
+      self.vis.create_window()      
+      self.vis.add_geometry(cloud)
 
-      # with open("viewpoint.json", "r") as f:
-      #   parameters = o3d.io.read_pinhole_camera_parameters(f)
+      if response.successcode == ConsPercept.NOTFOUND.value:
+        for ea in grippers:
+          self.vis.add_geometry(ea)
+      else:
+        self.vis.add_geometry(grippers[idx])
+        self.vis.add_geometry(sphere)
       
-      # ctr.convert_from_pinhole_camera_parameters(parameters, allow_arbitrary=True)
-      
-      vis.run()
-      vis.destroy_window()
+      ctr = self.vis.get_view_control()
+      ctr.set_front([-0.039, 0.63, -0.78])
+      ctr.set_lookat([0.01, -0.02, 0.65])
+      ctr.set_up([0.01, -0.78, -0.63])
+      ctr.set_zoom(0.3)
+
+      self.vis.run()
+      self.vis.destroy_window()
     
     return response
   
