@@ -10,11 +10,13 @@ from graspnetAPI import GraspGroup
 from my_libs.myframe import Myframe
 from my_libs.mycamera import Camera
 from my_libs.myconstants import ConsPercept
-from my_custom_interfaces.srv import TriggerVisionGetAll, TriggerVisionGetCropped, TriggerVisionGetContours, TriggerVisionGetPose, TriggerVisionGetSolutions
+from my_custom_interfaces.srv import TriggerWithBox
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
+from geometry_msgs.msg import PoseStamped
 import cv2
 from datetime import datetime
+from scipy.spatial.transform import Rotation as R
 
 from pathlib import Path
 import rclpy
@@ -46,7 +48,7 @@ class Perception(Node):
     self.img_dep = None
     self.mask = cv2.rectangle(np.zeros((self.camera.intrinsic[1], self.camera.intrinsic[0]), dtype=np.uint8), (150, 100), (500, 400), 255, -1)
 
-    self.create_service(TriggerVisionGetSolutions, "/triggervisiongetsolutions", callback=self.cb_trigger_get_solutions, callback_group=self.callback_group_A)
+    self.create_service(TriggerWithBox, "/triggerwithbox", callback=self.cb_trigger, callback_group=self.callback_group_A)
     self.create_subscription(Image, "/D455/color/image_raw", callback=self.cb_img_raw, callback_group=self.callback_group_B, qos_profile=10)
     self.create_subscription(Image, "/D455/aligned_depth_to_color/image_raw", callback=self.cb_img_dep, callback_group=self.callback_group_B, qos_profile=10)
 
@@ -69,7 +71,7 @@ class Perception(Node):
 
 
 
-  def cb_trigger_get_solutions(self, req, response):
+  def cb_trigger(self, req, response):
     self.logger.info("Triggered")
     if (self.img_raw is None) or (self.img_dep is None):
       self.logger.warn("Rgb and depth images have not been received yet. Try again.")
@@ -93,27 +95,57 @@ class Perception(Node):
       return ConsPercept.NOTFOUND.value
 
     gg = gg.nms().sort_by_score()
-    #we are only interested in the top 20 scores
-    # gg_pick = gg[0:20]
-    # u, v = self._get_uv_from_grasp(gg_pick[0])
-
     coords = map(self._get_uv_from_grasp, gg[:20])
+    bbox = req.bbox
+    corner0 = bbox.corners[0]
+    corner1 = bbox.corners[1]
+    x1, y1 = corner0.x, corner0.y
+    x2, y2 = corner1.x, corner1.y
+    assert x2 > x1, f"x2 must be greater than x1: {x1} vs {x2}"
+    assert y2 > y1, "y2 must be greater than y1: {y1} vs {y2}"
     for idx, each in enumerate(coords):
-      print(f"{idx}: Score: {gg[idx].score:.2f}\tCoord: {each}")
+      u, v = each
+      if x1 <= u <= x2 and y1 <= v <= y2:
+        ps = PoseStamped()
+        ps.header.stamp = self.get_clock().now().to_msg()
+        ps.header.frame_id = f"{self.camera.cam_name}_color_optical_frame"
+        target_F =Myframe.from_posit_only(gg[idx].translation)
+        target_F.R = R.from_matrix(gg[idx].rotation_matrix)
+        ps.pose = target_F.as_geom_pose()
+        response.pose_stamped = ps
+        response.width_mm = int(gg[idx].width * 1000)
+        response.score = gg[idx].score
+        print(f"Width: {gg[idx].width*1000:.0f}mm\tHeight: {gg[idx].height*1000:.0f}mm")
+        response.successcode = ConsPercept.FOUND.value
+        break
+    else:
+        response.successcode = ConsPercept.NOTFOUND.value
 
     # visualization
     if cfgs.debug:
       grippers = gg.to_open3d_geometry_list()
-      grippers[0].paint_uniform_color([1, 0, 0])
-      sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)
-      sphere.translate(gg[0].translation)
+      grippers[idx].paint_uniform_color([1, 0, 0])
+      sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
+      sphere.translate(gg[idx].translation)
       sphere.paint_uniform_color([1, 0, 0])
-      # o3d.visualization.draw_geometries([*grippers, cloud, sphere])
-      # o3d.visualization.draw_geometries([*grippers, cloud])
-      try:
-        o3d.visualization.draw_geometries([*grippers[:20], cloud, sphere])
-      except Exception as e:
-        self.logger.error(f"Error displaying o3d visualisation: {e}")
+      
+      vis = o3d.visualization.Visualizer()
+      vis.create_window()
+      
+      vis.add_geometry(grippers[idx])
+      vis.add_geometry(cloud)
+      vis.add_geometry(sphere)
+
+      ctr = vis.get_view_control()
+      print(dir(vis))
+
+      # with open("viewpoint.json", "r") as f:
+      #   parameters = o3d.io.read_pinhole_camera_parameters(f)
+      
+      # ctr.convert_from_pinhole_camera_parameters(parameters, allow_arbitrary=True)
+      
+      vis.run()
+      vis.destroy_window()
     
     return response
   
