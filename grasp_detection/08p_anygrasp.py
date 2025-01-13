@@ -114,10 +114,6 @@ class Perception(Node):
     # visualization
     if cfgs.debug:
       grippers = gg.to_open3d_geometry_list()
-      grippers[idx].paint_uniform_color([1, 0, 0])
-      sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
-      sphere.translate(gg[idx].translation)
-      sphere.paint_uniform_color([1, 0, 0])     
 
       self.vis = o3d.visualization.Visualizer()
       self.vis.create_window()      
@@ -127,6 +123,10 @@ class Perception(Node):
         for ea in grippers:
           self.vis.add_geometry(ea)
       else:
+        grippers[idx].paint_uniform_color([1, 0, 0])
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
+        sphere.translate(gg[idx].translation)
+        sphere.paint_uniform_color([1, 0, 0])     
         self.vis.add_geometry(grippers[idx])
         self.vis.add_geometry(sphere)
       
